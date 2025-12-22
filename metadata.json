@@ -1,0 +1,5 @@
+{
+  "name": "LGNS Swap Scanner & Analyzer",
+  "description": "A high-performance Polygon blockchain scanner that tracks LGNS/DAI swap events and aggregates real user trading data with CSV export and persistence.",
+  "requestFramePermissions": []
+}
