@@ -15,6 +15,14 @@
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        
+        .animate-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 <script type="importmap">
 {
@@ -29,5 +37,7 @@
 </head>
 <body>
     <div id="root"></div>
+    <!-- 引入入口文件，修复 Vercel 部署不显示问题 -->
+    <script type="module" src="./index.tsx"></script>
 </body>
 </html>

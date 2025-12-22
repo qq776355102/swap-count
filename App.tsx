@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
-import { ScannerConfig, AggregatedStats } from './types';
-import { DEFAULT_CONFIG } from './constants';
-import { dbService } from './services/db';
-import { aggregateSwaps } from './utils';
+import { ScannerConfig, AggregatedStats } from './types.ts';
+import { DEFAULT_CONFIG } from './constants.ts';
+import { dbService } from './services/db.ts';
+import { aggregateSwaps } from './utils.ts';
 
-import ScannerTab from './components/ScannerTab';
-import StatsTab from './components/StatsTab';
-import SettingsTab from './components/SettingsTab';
+import ScannerTab from './components/ScannerTab.tsx';
+import StatsTab from './components/StatsTab.tsx';
+import SettingsTab from './components/SettingsTab.tsx';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'scan' | 'stats' | 'settings'>('scan');
@@ -49,7 +49,7 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight">LGNS <span className="text-blue-500">Scanner</span></h1>
-            <p className="text-xs text-slate-500 font-medium">Polygon Swap Analytics v1.0</p>
+            <p className="text-xs text-slate-500 font-medium uppercase tracking-tighter">Polygon Swap Analytics</p>
           </div>
         </div>
 
@@ -83,8 +83,9 @@ const App: React.FC = () => {
         
         {activeTab === 'stats' && (
           loading ? (
-            <div className="flex items-center justify-center h-64">
+            <div className="flex flex-col items-center justify-center h-64 gap-4">
               <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+              <p className="text-slate-500 text-sm font-medium">Aggregating trade data...</p>
             </div>
           ) : (
             <StatsTab stats={stats} config={config} />
@@ -97,12 +98,12 @@ const App: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="bg-slate-900 border-t border-slate-800 px-6 py-4 text-center text-slate-500 text-sm">
-        <p>&copy; 2024 LGNS Swap Analytics Tool. For informational purposes only.</p>
-        <div className="mt-1 flex justify-center gap-4 text-xs">
-          <span className="flex items-center"><i className="fas fa-circle text-purple-500 text-[6px] mr-1.5"></i> Polygon Network</span>
-          <span className="flex items-center"><i className="fas fa-circle text-green-500 text-[6px] mr-1.5"></i> LGNS (Decimals: 9)</span>
-          <span className="flex items-center"><i className="fas fa-circle text-yellow-500 text-[6px] mr-1.5"></i> DAI (Decimals: 18)</span>
+      <footer className="bg-slate-900 border-t border-slate-800 px-6 py-8 text-center text-slate-500 text-sm">
+        <p className="mb-4">&copy; 2024 LGNS Swap Analytics Tool. Fast & Secure Blockchain Scanning.</p>
+        <div className="flex justify-center flex-wrap gap-4 text-[10px] font-bold uppercase tracking-widest">
+          <span className="flex items-center px-3 py-1 bg-slate-800 rounded-full"><i className="fas fa-circle text-purple-500 text-[6px] mr-2"></i> Polygon Network</span>
+          <span className="flex items-center px-3 py-1 bg-slate-800 rounded-full"><i className="fas fa-circle text-green-500 text-[6px] mr-2"></i> LGNS (9 Decimals)</span>
+          <span className="flex items-center px-3 py-1 bg-slate-800 rounded-full"><i className="fas fa-circle text-yellow-500 text-[6px] mr-2"></i> DAI (18 Decimals)</span>
         </div>
       </footer>
     </div>
