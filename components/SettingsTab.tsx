@@ -28,13 +28,20 @@ const SettingsTab: React.FC<Props> = ({ config, onUpdate }) => {
 
   // Time states initialized to local time
   const [startTime, setStartTime] = useState<string>(() => {
-    const d = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24h ago
+    const d = new Date('2026-03-28T14:00:00Z'); // 22:00 Beijing
     return toLocalISO(d);
   });
   const [endTime, setEndTime] = useState<string>(() => {
-    const d = new Date();
+    const d = new Date('2026-03-28T18:00:00Z'); // 02:00 Beijing (next day)
     return toLocalISO(d);
   });
+
+  const setBeijingPreset = () => {
+    const start = new Date('2026-03-28T14:00:00Z');
+    const end = new Date('2026-03-28T18:00:00Z');
+    setStartTime(toLocalISO(start));
+    setEndTime(toLocalISO(end));
+  };
 
   const fetchReference = useCallback(async () => {
     setLoadingRef(true);
@@ -117,14 +124,35 @@ const SettingsTab: React.FC<Props> = ({ config, onUpdate }) => {
              )}
           </div>
         </div>
-        <button 
-          onClick={fetchReference}
-          disabled={loadingRef}
-          className="text-xs bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg border border-slate-600 flex items-center transition-all active:scale-95 shadow-lg"
-        >
-          <i className={`fas fa-sync-alt mr-2 ${loadingRef ? 'animate-spin' : ''}`}></i>
-          {loadingRef ? 'Syncing...' : 'Sync Reference'}
-        </button>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={setBeijingPreset}
+            className="text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 px-4 py-2 rounded-lg border border-blue-500/30 flex items-center transition-all active:scale-95"
+          >
+            <i className="fas fa-magic mr-2"></i>
+            Beijing Target Preset
+          </button>
+          <button 
+            onClick={fetchReference}
+            disabled={loadingRef}
+            className="text-xs bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg border border-slate-600 flex items-center transition-all active:scale-95 shadow-lg"
+          >
+            <i className={`fas fa-sync-alt mr-2 ${loadingRef ? 'animate-spin' : ''}`}></i>
+            {loadingRef ? 'Syncing...' : 'Sync Reference'}
+          </button>
+        </div>
+      </div>
+      
+      <div className="mb-6 flex items-center gap-4 text-xs font-mono text-slate-500 bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+          <span>Current Beijing Time: <span className="text-slate-300">{new Date(new Date().getTime() + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19)}</span></span>
+        </div>
+        <div className="w-px h-4 bg-slate-700"></div>
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+          <span>Target Range: <span className="text-slate-300">03-28 22:00 to 03-29 02:00</span></span>
+        </div>
       </div>
       
       <form onSubmit={handleSubmit} className="space-y-8">

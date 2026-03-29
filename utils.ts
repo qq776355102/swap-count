@@ -34,17 +34,36 @@ export function formatTokenAmountSimple(amount: string | bigint, decimals: numbe
 
 /**
  * Estimates a block number based on a target timestamp, reference block, and block time.
+ * Polygon average block time is approx 2.1s.
  */
 export function estimateBlockByTime(
   targetTimestampMs: number,
   refBlock: number,
   refTimestampS: number,
-  blockTimeS: number = 2
+  blockTimeS: number = 2.1
 ): number {
   const targetS = Math.floor(targetTimestampMs / 1000);
   const deltaS = targetS - refTimestampS;
-  const deltaBlocks = Math.floor(deltaS / blockTimeS);
+  const deltaBlocks = Math.round(deltaS / blockTimeS);
   return refBlock + deltaBlocks;
+}
+
+/**
+ * Specifically calculates the target range blocks based on current network state
+ */
+export function calculateTargetBlocks(
+  currentBlock: number,
+  currentTimestampS: number,
+  blockTimeS: number = 2.1
+) {
+  // Target: 2026-03-28 22:00 Beijing (14:00 UTC) to 2026-03-29 02:00 Beijing (18:00 UTC)
+  const targetStartS = Math.floor(new Date('2026-03-28T14:00:00Z').getTime() / 1000);
+  const targetEndS = Math.floor(new Date('2026-03-28T18:00:00Z').getTime() / 1000);
+
+  const startBlock = currentBlock - Math.round((currentTimestampS - targetStartS) / blockTimeS);
+  const endBlock = currentBlock - Math.round((currentTimestampS - targetEndS) / blockTimeS);
+
+  return { startBlock, endBlock };
 }
 
 export function aggregateSwaps(records: SwapRecord[]): AggregatedStats[] {

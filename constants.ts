@@ -1,9 +1,9 @@
 
 export const DEFAULT_CONFIG = {
-  rpcUrl: 'https://pol79729.allnodes.me:8545/fiBUP22lpmCFIeuv',
-  startBlock: 80648000, 
-  endBlock: 80650000,
-  chunkSize: 500,
+  rpcUrl: 'https://api.zan.top/node/v1/polygon/mainnet/b4252a8bd2114d78982ec813c46a06eb',
+  startBlock: 80637400, 
+  endBlock: 80644600,
+  chunkSize: 50,
   threshold: '1',
   pairAddress: '0x882df4B0fB50a229C3B4124EB18c759911485bFb',
   token0: {
@@ -18,7 +18,7 @@ export const DEFAULT_CONFIG = {
   }
 };
 
-export const FALLBACK_RPC_URL = 'https://dimensional-warmhearted-borough.matic.quiknode.pro/8d6b4c4e9e51944c650c74a447f3ae960c9f8cfe';
+export const FALLBACK_RPC_URL = 'https://pol79729.allnodes.me:8545/fiBUP22lpmCFIeuv';
 
 export const UNISWAP_V2_PAIR_ABI = [
   "event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)"

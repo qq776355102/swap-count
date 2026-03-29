@@ -3,13 +3,15 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ScannerConfig, ScanProgress } from '../types';
 import { SwapScanner } from '../services/scanner';
 import { dbService } from '../services/db';
+import { calculateTargetBlocks } from '../utils';
 
 interface Props {
   config: ScannerConfig;
   onRefreshStats: () => void;
+  onUpdateConfig: (newConfig: ScannerConfig) => void;
 }
 
-const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
+const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig }) => {
   const [progress, setProgress] = useState<ScanProgress>({
     currentBlock: config.startBlock,
     startBlock: config.startBlock,
@@ -19,20 +21,62 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
   });
   
   const [logs, setLogs] = useState<string[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
   const isCancelledRef = useRef(false);
 
+  // Sync progress state when config changes
+  useEffect(() => {
+    setProgress(p => ({
+      ...p,
+      currentBlock: config.startBlock,
+      startBlock: config.startBlock,
+      endBlock: config.endBlock
+    }));
+  }, [config.startBlock, config.endBlock]);
+
   const addLog = (msg: string) => {
-    setLogs(prev => [msg, ...prev].slice(0, 100)); // Increased log buffer for retry tracking
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs(prev => [`[${timestamp}] ${msg}`, ...prev].slice(0, 100));
   };
 
-  const startScan = async () => {
+  const syncBlocks = async () => {
+    setIsSyncing(true);
+    addLog(`🔄 Syncing current block height for target range...`);
+    try {
+      const scanner = new SwapScanner(config);
+      const latest = await scanner.getLatestBlock();
+      const { startBlock, endBlock } = calculateTargetBlocks(latest.number, latest.timestamp);
+      
+      onUpdateConfig({
+        ...config,
+        startBlock,
+        endBlock
+      });
+      
+      addLog(`✅ Range synced: ${startBlock.toLocaleString()} to ${endBlock.toLocaleString()}`);
+      addLog(`ℹ️ Based on latest block #${latest.number.toLocaleString()} at ${new Date(latest.timestamp * 1000).toLocaleTimeString()}`);
+    } catch (e: any) {
+      addLog(`❌ Sync failed: ${e.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const startScan = async (resumeFrom?: number) => {
     isCancelledRef.current = false;
     setProgress(p => ({ ...p, isScanning: true, error: undefined }));
-    addLog(`🚀 Starting scan from block ${config.startBlock} to ${config.endBlock}`);
+    
+    const isResume = typeof resumeFrom === 'number';
+    const actualStart = isResume ? resumeFrom : config.startBlock;
+    const initialFound = isResume ? progress.stats.foundSwaps : 0;
+    
+    console.log(`ScannerTab: startScan called. isResume=${isResume}, resumeFrom=${resumeFrom}, actualStart=${actualStart}, initialFound=${initialFound}, chunkSize=${config.chunkSize}`);
+    addLog(`🚀 ${isResume ? 'Resuming' : 'Starting'} scan from block ${actualStart} to ${config.endBlock} (Chunk Size: ${config.chunkSize})`);
+    console.log(`ScannerTab: Calling scanRange with start=${actualStart}, end=${config.endBlock}`);
 
-    // Pass addLog to scanner to see retry/switch messages in the UI
     const scanner = new SwapScanner(config, addLog);
-    await scanner.scanRange(
+    try {
+      await scanner.scanRange(
       (current, found) => {
         setProgress(p => ({
           ...p,
@@ -50,8 +94,15 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
         setProgress(p => ({ ...p, isScanning: false, error: err }));
         addLog(`❌ Error: ${err}`);
       },
-      () => isCancelledRef.current
+      () => isCancelledRef.current,
+      actualStart,
+      initialFound
     );
+    } catch (error: any) {
+      console.error("Scan error caught in ScannerTab:", error);
+      setProgress(p => ({ ...p, isScanning: false, error: error.message || 'Unknown scanning error' }));
+      addLog(`❌ Error: ${error.message || 'Unknown error'}`);
+    }
   };
 
   const stopScan = () => {
@@ -74,6 +125,26 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
 
   return (
     <div className="space-y-6">
+      {progress.error && (
+        <div className="bg-red-900/20 border border-red-800/50 p-4 rounded-xl flex items-center justify-between animate-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-red-600/20 rounded-full flex items-center justify-center text-red-400">
+              <i className="fas fa-exclamation-triangle"></i>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-red-300">Scanning Error</p>
+              <p className="text-xs text-red-400/80">{progress.error}</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => startScan(progress.currentBlock)}
+            className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-lg text-xs font-bold transition-all shadow-lg shadow-red-600/20"
+          >
+            <i className="fas fa-redo mr-2"></i> Resume from Block {progress.currentBlock}
+          </button>
+        </div>
+      )}
+
       <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl">
         <h3 className="text-xl font-bold mb-4 flex items-center">
           <i className="fas fa-radar mr-2 text-blue-400"></i> Scanner Status
@@ -85,8 +156,13 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
             <div className="text-2xl font-bold">{percent.toFixed(2)}%</div>
           </div>
           <div className="bg-slate-900 p-4 rounded-lg border border-slate-700">
-            <div className="text-slate-400 text-sm">Blocks</div>
-            <div className="text-2xl font-bold">{progress.currentBlock.toLocaleString()} / {progress.endBlock.toLocaleString()}</div>
+            <div className="text-slate-400 text-sm">Scan Range (Blocks)</div>
+            <div className="text-xl font-bold font-mono">
+              {progress.startBlock.toLocaleString()} <span className="text-slate-600 mx-1">→</span> {progress.endBlock.toLocaleString()}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1 uppercase font-bold">
+              Current: {progress.currentBlock.toLocaleString()}
+            </div>
           </div>
           <div className="bg-slate-900 p-4 rounded-lg border border-slate-700">
             <div className="text-slate-400 text-sm">Swaps Identified</div>
@@ -103,16 +179,26 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
 
         <div className="flex flex-wrap gap-4">
           {!progress.isScanning ? (
-            <button 
-              onClick={startScan}
-              className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold flex items-center transition-colors"
-            >
-              <i className="fas fa-play mr-2"></i> Start Scanning
-            </button>
+            <>
+              <button 
+                onClick={() => startScan()}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold flex items-center transition-colors shadow-lg shadow-blue-500/20"
+              >
+                <i className="fas fa-play mr-2"></i> Start Scanning
+              </button>
+              <button 
+                onClick={syncBlocks}
+                disabled={isSyncing}
+                className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg font-semibold flex items-center transition-colors shadow-lg shadow-purple-500/20"
+              >
+                <i className={`fas fa-sync-alt mr-2 ${isSyncing ? 'animate-spin' : ''}`}></i>
+                {isSyncing ? 'Syncing...' : 'Sync Target Range'}
+              </button>
+            </>
           ) : (
             <button 
               onClick={stopScan}
-              className="px-6 py-2 bg-red-600 hover:bg-red-500 rounded-lg font-semibold flex items-center transition-colors"
+              className="px-6 py-2 bg-red-600 hover:bg-red-500 rounded-lg font-semibold flex items-center transition-colors shadow-lg shadow-red-500/20"
             >
               <i className="fas fa-stop mr-2"></i> Stop Scan
             </button>
@@ -136,7 +222,7 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats }) => {
           {logs.length === 0 && <div className="text-slate-600">Waiting for activity...</div>}
           {logs.map((log, i) => (
             <div key={i} className="text-slate-300">
-              <span className="text-slate-500">[{new Date().toLocaleTimeString()}]</span> {log}
+              {log}
             </div>
           ))}
         </div>

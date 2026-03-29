@@ -78,7 +78,7 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-6">
         {activeTab === 'scan' && (
-          <ScannerTab config={config} onRefreshStats={refreshStats} />
+          <ScannerTab config={config} onRefreshStats={refreshStats} onUpdateConfig={setConfig} />
         )}
         
         {activeTab === 'stats' && (

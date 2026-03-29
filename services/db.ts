@@ -38,18 +38,20 @@ export class DatabaseService {
     const store = tx.objectStore(STORE_NAME);
     
     for (const record of records) {
-      // Put used to handle unique constraint via index if we wanted, 
-      // but IndexedDB's unique index will just error on add. 
-      // We manually check or just try/catch.
-      try {
-        store.add(record);
-      } catch (e) {
-        // Skip duplicates
-      }
+      const request = store.add(record);
+      request.onerror = (e) => {
+        // If it's a ConstraintError (duplicate), we just skip it and prevent transaction abort
+        if (request.error?.name === 'ConstraintError') {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      };
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(new Error('Transaction failed: ' + tx.error?.message));
+      tx.onabort = () => reject(new Error('Transaction aborted: ' + tx.error?.message));
     });
   }
 
