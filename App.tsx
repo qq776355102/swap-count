@@ -88,7 +88,7 @@ const App: React.FC = () => {
               <p className="text-slate-500 text-sm font-medium">Aggregating trade data...</p>
             </div>
           ) : (
-            <StatsTab stats={stats} config={config} />
+            <StatsTab stats={stats} config={config} onRefreshStats={refreshStats} />
           )
         )}
 

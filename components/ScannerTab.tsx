@@ -4,6 +4,7 @@ import { ScannerConfig, ScanProgress } from '../types';
 import { SwapScanner } from '../services/scanner';
 import { dbService } from '../services/db';
 import { calculateTargetBlocks } from '../utils';
+import ConfirmModal from './ConfirmModal';
 
 interface Props {
   config: ScannerConfig;
@@ -22,6 +23,7 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
   
   const [logs, setLogs] = useState<string[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const isCancelledRef = useRef(false);
 
   // Sync progress state when config changes
@@ -64,9 +66,21 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
 
   const startScan = async (resumeFrom?: number) => {
     isCancelledRef.current = false;
-    setProgress(p => ({ ...p, isScanning: true, error: undefined }));
-    
     const isResume = typeof resumeFrom === 'number';
+
+    if (!isResume) {
+      await dbService.clearAll();
+      onRefreshStats();
+      addLog(`🗑️ Previous data cleared for new scan.`);
+    }
+
+    setProgress(p => ({ 
+      ...p, 
+      isScanning: true, 
+      error: undefined,
+      stats: isResume ? p.stats : { processedTxs: 0, foundSwaps: 0 }
+    }));
+    
     const actualStart = isResume ? resumeFrom : config.startBlock;
     const initialFound = isResume ? progress.stats.foundSwaps : 0;
     
@@ -111,11 +125,9 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
   };
 
   const clearDb = async () => {
-    if (window.confirm('Are you sure you want to clear all stored records?')) {
-      await dbService.clearAll();
-      onRefreshStats();
-      addLog(`🗑️ Database cleared.`);
-    }
+    await dbService.clearAll();
+    onRefreshStats();
+    addLog(`🗑️ Database cleared.`);
   };
 
   const percent = Math.min(
@@ -204,7 +216,7 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
             </button>
           )}
           <button 
-            onClick={clearDb}
+            onClick={() => setIsConfirmOpen(true)}
             disabled={progress.isScanning}
             className="px-6 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg font-semibold flex items-center transition-colors"
           >
@@ -212,6 +224,16 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={isConfirmOpen}
+        title="Clear Database"
+        message="Are you sure you want to clear all stored records? This action cannot be undone."
+        confirmText="Clear All"
+        isDestructive={true}
+        onConfirm={clearDb}
+        onCancel={() => setIsConfirmOpen(false)}
+      />
 
       <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-xl overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">

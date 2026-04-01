@@ -2,21 +2,26 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { AggregatedStats, ScannerConfig } from '../types.ts';
 import { formatAddress, formatTokenAmount, generateCSV, downloadFile } from '../utils.ts';
+import { dbService } from '../services/db.ts';
+import ConfirmModal from './ConfirmModal.tsx';
 
 interface Props {
   stats: AggregatedStats[];
   config: ScannerConfig;
+  onRefreshStats: () => void;
 }
 
 const PAGE_SIZE = 50;
 
-const StatsTab: React.FC<Props> = ({ stats, config }) => {
+const StatsTab: React.FC<Props> = ({ stats, config, onRefreshStats }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sortField, setSortField] = useState<keyof AggregatedStats>('netLgns');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
   // 1. 搜索防抖逻辑
   useEffect(() => {
@@ -83,6 +88,16 @@ const StatsTab: React.FC<Props> = ({ stats, config }) => {
     const start = (currentPage - 1) * PAGE_SIZE;
     return filteredStats.slice(start, start + PAGE_SIZE);
   }, [filteredStats, currentPage]);
+
+  const handleClear = async () => {
+    setIsClearing(true);
+    try {
+      await dbService.clearAll();
+      onRefreshStats();
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   const handleSort = (field: keyof AggregatedStats) => {
     if (sortField === field) {
@@ -173,6 +188,17 @@ const StatsTab: React.FC<Props> = ({ stats, config }) => {
           />
         </div>
         <div className="flex items-center gap-4 w-full md:w-auto">
+          <button 
+            onClick={() => setIsConfirmOpen(true)}
+            disabled={isClearing || stats.length === 0}
+            className="w-full md:w-auto px-6 py-3 bg-slate-700 hover:bg-red-600/80 disabled:bg-slate-800 disabled:text-slate-600 rounded-xl font-bold flex items-center justify-center transition-all shadow-lg active:scale-95 text-sm"
+          >
+            {isClearing ? (
+              <><i className="fas fa-circle-notch animate-spin mr-2"></i> Clearing...</>
+            ) : (
+              <><i className="fas fa-trash-alt mr-2"></i> Clear Data</>
+            )}
+          </button>
           <span className="text-[10px] text-slate-500 hidden sm:inline font-bold tracking-widest uppercase">
             {filteredStats.length.toLocaleString()} Wallets
           </span>
@@ -189,6 +215,16 @@ const StatsTab: React.FC<Props> = ({ stats, config }) => {
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={isConfirmOpen}
+        title="Clear Statistics"
+        message="Are you sure you want to clear all stored statistics? This action cannot be undone and will remove all trade history from the database."
+        confirmText="Clear All Data"
+        isDestructive={true}
+        onConfirm={handleClear}
+        onCancel={() => setIsConfirmOpen(false)}
+      />
 
       {/* 数据表格 */}
       <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
