@@ -22,9 +22,32 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
   });
   
   const [logs, setLogs] = useState<string[]>([]);
+  const logsRef = useRef<string[]>([]);
+  const logUpdateTimerRef = useRef<any>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const isCancelledRef = useRef(false);
+
+  // Buffer logs to prevent re-render storms
+  const addLog = (msg: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const newLog = `[${timestamp}] ${msg}`;
+    logsRef.current = [newLog, ...logsRef.current].slice(0, 200);
+    
+    if (!logUpdateTimerRef.current) {
+      logUpdateTimerRef.current = setTimeout(() => {
+        setLogs([...logsRef.current]);
+        logUpdateTimerRef.current = null;
+      }, 500);
+    }
+  };
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (logUpdateTimerRef.current) clearTimeout(logUpdateTimerRef.current);
+    };
+  }, []);
 
   // Sync progress state when config changes
   useEffect(() => {
@@ -35,11 +58,6 @@ const ScannerTab: React.FC<Props> = ({ config, onRefreshStats, onUpdateConfig })
       endBlock: config.endBlock
     }));
   }, [config.startBlock, config.endBlock]);
-
-  const addLog = (msg: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    setLogs(prev => [`[${timestamp}] ${msg}`, ...prev].slice(0, 100));
-  };
 
   const syncBlocks = async () => {
     setIsSyncing(true);

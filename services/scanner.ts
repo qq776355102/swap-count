@@ -1,4 +1,3 @@
-
 import { ethers } from 'ethers';
 import { 
   ScannerConfig, 
@@ -9,7 +8,8 @@ import { UNISWAP_V2_PAIR_ABI, ERC20_ABI, FALLBACK_RPC_URL } from '../constants';
 import { dbService } from './db';
 
 export class SwapScanner {
-  private providers: ethers.JsonRpcProvider[];
+  private providers: ethers.JsonRpcProvider[] = [];
+  private providerUrls: string[] = [];
   private consecutiveFailures: number = 0;
   private config: ScannerConfig;
   private pairIface: ethers.Interface;
@@ -19,11 +19,18 @@ export class SwapScanner {
   constructor(config: ScannerConfig, onLog?: (msg: string) => void) {
     this.config = config;
     this.onLog = onLog;
-    // Initialize primary and fallback providers
-    this.providers = [
-      new ethers.JsonRpcProvider(config.rpcUrl),
-      new ethers.JsonRpcProvider(FALLBACK_RPC_URL)
+
+    // Direct, dedicated full/archive nodes provided by the user (no pruning limits)
+    const urls = [
+      config.rpcUrl,
+      FALLBACK_RPC_URL
     ];
+
+    // Filter duplicates and invalid/empty URLs
+    const uniqueUrls = Array.from(new Set(urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0)));
+    this.providerUrls = uniqueUrls;
+    this.providers = uniqueUrls.map(url => new ethers.JsonRpcProvider(url));
+
     this.pairIface = new ethers.Interface(UNISWAP_V2_PAIR_ABI);
     this.erc20Iface = new ethers.Interface(ERC20_ABI);
   }
@@ -33,14 +40,11 @@ export class SwapScanner {
   }
 
   /**
-   * Helper to fetch logs with retry logic: 5 retries on Primary, then 5 retries on Fallback.
-   * Total 12 attempts (1 initial + 5 retries per provider).
+   * Helper to fetch logs with fast automatic failover across a pool of providers.
+   * Uses a responsive 12-second timeout and immediately tries another provider if one fails or times out.
    */
   private async fetchLogsWithRetry(filter: any, isCancelled: () => boolean): Promise<ethers.Log[]> {
-    let lastError: any;
-    const retriesPerProvider = 5;
-    const timeoutMs = 30000; // 30 seconds timeout for each request
-    
+    const timeoutMs = 12000; // 12 seconds per call
     const swapTopic = this.pairIface.getEvent('Swap')?.topicHash;
     const transferTopic = this.erc20Iface.getEvent('Transfer')?.topicHash;
     
@@ -51,54 +55,55 @@ export class SwapScanner {
     };
 
     console.log(`🔍 fetchLogsWithRetry started for range ${filter.fromBlock}-${filter.toBlock}`);
-    this.onLog?.(`🔍 Fetching logs for range ${filter.fromBlock}-${filter.toBlock}...`);
 
-    for (let pIdx = 0; pIdx < this.providers.length; pIdx++) {
+    // Random start index to distribute query load across public RPCs
+    const startIdx = Math.floor(Math.random() * this.providers.length);
+    let attempts = 0;
+    const maxTotalAttempts = this.providers.length * 2; // Each provider can be tried up to twice
+    let lastError: any = new Error('No RPC provider succeeded');
+
+    while (attempts < maxTotalAttempts) {
+      if (isCancelled()) throw new Error('Scan cancelled');
+
+      const pIdx = (startIdx + attempts) % this.providers.length;
       const provider = this.providers[pIdx];
-      const providerName = pIdx === 0 ? 'Primary' : 'Fallback';
+      const providerUrl = this.providerUrls[pIdx];
+      // Display friendly hostname in logs
+      const providerName = providerUrl ? providerUrl.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : `Provider-${pIdx + 1}`;
 
-      for (let attempt = 0; attempt <= retriesPerProvider; attempt++) {
-        if (isCancelled()) throw new Error('Scan cancelled');
+      let timeoutId: any;
+      try {
+        const attemptMsg = `📡 [${providerName}] Querying blocks ${filter.fromBlock}-${filter.toBlock} (Attempt ${attempts + 1}/${maxTotalAttempts})...`;
+        console.log(attemptMsg);
+        
+        const startTime = Date.now();
+        const logs = await Promise.race([
+          provider.getLogs(optimizedFilter),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('RPC request timed out after 12s')), timeoutMs);
+          })
+        ]);
+        clearTimeout(timeoutId);
 
-        try {
-          const attemptMsg = `📡 [${providerName}] ${attempt === 0 ? 'Initial request' : 'Retry ' + attempt + '/5'} for blocks ${filter.fromBlock}-${filter.toBlock}...`;
-          console.log(attemptMsg);
-          this.onLog?.(attemptMsg);
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        this.onLog?.(`✅ [${providerName}] Got ${logs.length} logs for blocks ${filter.fromBlock}-${filter.toBlock} in ${duration}s`);
+        this.consecutiveFailures = 0;
+        return logs;
+      } catch (err: any) {
+        if (timeoutId) clearTimeout(timeoutId);
+        if (err.message === 'Scan cancelled') throw err;
 
-          const startTime = Date.now();
-          // Timeout wrapper
-          const logs = await Promise.race([
-            provider.getLogs(optimizedFilter),
-            new Promise<never>((_, reject) => 
-              setTimeout(() => reject(new Error('Request timeout after 30s')), timeoutMs)
-            )
-          ]);
-          const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-          
-          this.onLog?.(`✅ [${providerName}] Received ${logs.length} logs in ${duration}s`);
-          this.consecutiveFailures = 0;
-          return logs;
-        } catch (err: any) {
-          if (err.message === 'Scan cancelled') throw err;
-          
-          lastError = err;
-          this.consecutiveFailures++;
-          
-          const isLastAttemptOverall = (pIdx === this.providers.length - 1) && (attempt === retriesPerProvider);
-          
-          if (!isLastAttemptOverall) {
-            const delay = 20000; // 20 seconds
-            const logMsg = `⚠️ [${providerName}] Attempt failed: ${err.message || 'Unknown error'}. Retrying in 20s...`;
-            console.warn(logMsg);
-            this.onLog?.(logMsg);
-            
-            // Check cancellation during sleep
-            for (let s = 0; s < delay; s += 1000) {
-              if (isCancelled()) throw new Error('Scan cancelled');
-              await this.sleep(1000);
-            }
-            continue;
-          }
+        lastError = err;
+        this.consecutiveFailures++;
+        attempts++;
+
+        const errMsg = err.message || 'Unknown error';
+        console.warn(`⚠️ [${providerName}] Failed for range ${filter.fromBlock}-${filter.toBlock}: ${errMsg}`);
+        this.onLog?.(`⚠️ [${providerName}] Failed for ${filter.fromBlock}-${filter.toBlock}: ${errMsg}`);
+
+        if (attempts < maxTotalAttempts) {
+          // Responsive gap delay before hitting next provider
+          await this.sleep(300);
         }
       }
     }
@@ -106,46 +111,47 @@ export class SwapScanner {
   }
 
   /**
-   * Fetches the latest block number and timestamp with retry logic
+   * Fetches the latest block number and timestamp with fast provider failover
    */
   async getLatestBlock(): Promise<{ number: number; timestamp: number }> {
-    let lastError: any;
-    const retriesPerProvider = 5;
+    let lastError: any = new Error('All RPC providers failed');
+    const timeoutMs = 12000;
 
     for (let pIdx = 0; pIdx < this.providers.length; pIdx++) {
       const provider = this.providers[pIdx];
-      const providerName = pIdx === 0 ? 'Primary' : 'Fallback';
+      const providerUrl = this.providerUrls[pIdx];
+      const providerName = providerUrl ? providerUrl.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : `Provider-${pIdx + 1}`;
 
-      for (let attempt = 1; attempt <= retriesPerProvider; attempt++) {
-        try {
-          const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('RPC request timed out after 30s')), 30000);
-          });
+      try {
+        let timeoutId: any;
+        const block = await Promise.race([
+          provider.getBlock('latest'),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('RPC request timed out after 12s')), timeoutMs);
+          })
+        ]) as any;
+        clearTimeout(timeoutId);
 
-          const blockPromise = provider.getBlock('latest');
-          const block = await Promise.race([blockPromise, timeoutPromise]) as any;
-
-          if (!block) throw new Error('Failed to fetch latest block');
-          return {
-            number: block.number,
-            timestamp: block.timestamp
-          };
-        } catch (err: any) {
-          lastError = err;
-          const logMsg = `⚠️ [${providerName}] getLatestBlock attempt ${attempt} failed: ${err.message || 'Unknown error'}`;
-          console.warn(logMsg);
-          this.onLog?.(logMsg);
-
-          if (attempt < retriesPerProvider || pIdx < this.providers.length - 1) {
-            this.onLog?.(`⏳ Waiting 20s before retry...`);
-            await this.sleep(20000);
-          }
+        if (!block) throw new Error('Failed to fetch latest block');
+        return {
+          number: block.number,
+          timestamp: block.timestamp
+        };
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`⚠️ [${providerName}] getLatestBlock failed: ${err.message || 'Unknown error'}`);
+        if (pIdx < this.providers.length - 1) {
+          await this.sleep(300);
         }
       }
     }
-    throw lastError || new Error('All RPC providers failed to fetch latest block');
+    throw lastError;
   }
 
+  /**
+   * High performance concurrent block range scanner.
+   * Processes multiple chunk ranges in parallel and maintains contiguous progress reporting.
+   */
   async scanRange(
     onProgress: (current: number, found: number, logMsg?: string) => void,
     onComplete: () => void,
@@ -162,22 +168,54 @@ export class SwapScanner {
       const chunkSize = Math.max(1, this.config.chunkSize);
       
       console.log(`SwapScanner: scanRange starting. start=${start}, end=${end}, chunkSize=${chunkSize}`);
-      this.onLog?.(`🔍 Scan loop starting: ${start} to ${end}`);
+      this.onLog?.(`🚀 Starting fast parallel scan from block ${start} to ${end}`);
 
+      // 1. Build list of total chunk ranges to process
+      const chunks: { fromBlock: number; toBlock: number }[] = [];
       for (let i = start; i <= end; i += chunkSize) {
-        if (isCancelled()) {
-          console.log("Scan cancelled by user");
-          break;
-        }
+        chunks.push({
+          fromBlock: i,
+          toBlock: Math.min(i + chunkSize - 1, end)
+        });
+      }
 
-        const chunkEnd = Math.min(i + chunkSize - 1, end);
-        console.log(`📦 Processing chunk: ${i} to ${chunkEnd}`);
+      if (chunks.length === 0) {
+        onComplete();
+        return;
+      }
+
+      // Track contiguous completed blocks starting from the root start block
+      const completedBlocks = new Set<number>();
+      let furthestContiguousBlock = start - 1;
+
+      const updateProgressTrack = (fromBlock: number, toBlock: number) => {
+        completedBlocks.add(fromBlock);
+
+        let temp = furthestContiguousBlock + 1;
+        while (completedBlocks.has(temp)) {
+          const chunk = chunks.find(c => c.fromBlock === temp);
+          if (chunk) {
+            furthestContiguousBlock = chunk.toBlock;
+            temp = furthestContiguousBlock + 1;
+          } else {
+            break;
+          }
+        }
+        return furthestContiguousBlock;
+      };
+
+      // Set parallel requests concurrency (e.g., 4 parallel streams)
+      const CONCURRENCY = 4;
+      let nextChunkIndex = 0;
+      let hasError = false;
+      let errorMsg = '';
+
+      const processChunk = async (chunk: { fromBlock: number; toBlock: number }) => {
         let logs: ethers.Log[] = [];
-        
         try {
           logs = await this.fetchLogsWithRetry({
-            fromBlock: i,
-            toBlock: chunkEnd,
+            fromBlock: chunk.fromBlock,
+            toBlock: chunk.toBlock,
             address: [
               this.config.pairAddress,
               this.config.token0.address,
@@ -185,17 +223,21 @@ export class SwapScanner {
             ]
           }, isCancelled);
         } catch (err: any) {
-          if (isCancelled() || err.message === 'Scan cancelled') break;
-          onError(`Fatal RPC error at block ${i}: ${err.message || 'Unknown error'}`);
+          if (isCancelled() || err.message === 'Scan cancelled') return;
+          hasError = true;
+          errorMsg = `Fatal RPC error at blocks ${chunk.fromBlock}-${chunk.toBlock}: ${err.message || 'Unknown error'}`;
           return;
         }
 
+        if (isCancelled() || hasError) return;
+
+        let foundInChunk = 0;
         if (logs.length > 0) {
           const startTime = Date.now();
           const swapTopic = this.pairIface.getEvent('Swap')?.topicHash;
           const pairAddr = this.config.pairAddress.toLowerCase();
           
-          // 1. Identify transactions that have a Swap on our pair
+          // Identify transactions that have a Swap on our pair
           const swapTxHashes = new Set<string>();
           for (const log of logs) {
             if (log.address.toLowerCase() === pairAddr && log.topics[0] === swapTopic) {
@@ -203,121 +245,156 @@ export class SwapScanner {
             }
           }
 
-          if (swapTxHashes.size === 0) {
-            console.log(`ℹ️ No swaps found in ${logs.length} logs for blocks ${i}-${chunkEnd}`);
-            onProgress(chunkEnd, totalFound);
-            continue;
-          }
+          if (swapTxHashes.size > 0) {
+            // Group only logs belonging to these target transaction hashes
+            const txGroups = new Map<string, ethers.Log[]>();
+            const txBlocks = new Map<string, number>();
 
-          console.log(`🎯 Found ${swapTxHashes.size} swap transactions in ${logs.length} logs`);
-          this.onLog?.(`🎯 Found ${swapTxHashes.size} swap transactions in this chunk...`);
-
-          // 2. Group only logs belonging to these transactions
-          const txGroups = new Map<string, ethers.Log[]>();
-          const txBlocks = new Map<string, number>();
-
-          for (const log of logs) {
-            const hash = log.transactionHash;
-            if (swapTxHashes.has(hash)) {
-              if (!txGroups.has(hash)) {
-                txGroups.set(hash, []);
-                txBlocks.set(hash, log.blockNumber);
+            let logCounter = 0;
+            for (const log of logs) {
+              logCounter++;
+              if (logCounter % 500 === 0) {
+                await this.sleep(1);
               }
-              txGroups.get(hash)!.push(log);
-            }
-          }
 
-          const newRecords: SwapRecord[] = [];
-          let processedCount = 0;
-
-          for (const [txHash, txLogs] of txGroups.entries()) {
-            processedCount++;
-            
-            // Yield every 50 transactions to keep UI responsive
-            if (processedCount % 50 === 0) {
-              await this.sleep(0);
+              const hash = log.transactionHash;
+              if (swapTxHashes.has(hash)) {
+                if (!txGroups.has(hash)) {
+                  txGroups.set(hash, []);
+                  txBlocks.set(hash, log.blockNumber);
+                }
+                txGroups.get(hash)!.push(log);
+              }
             }
 
+            const newRecords: SwapRecord[] = [];
+            let processedCount = 0;
             const addressStats = new Map<string, { deltaDai: bigint; deltaLgns: bigint }>();
-            const getStat = (addr: string) => {
-              const lower = addr.toLowerCase();
-              if (!addressStats.has(lower)) {
-                addressStats.set(lower, { deltaDai: 0n, deltaLgns: 0n });
+
+            for (const [txHash, txLogs] of txGroups.entries()) {
+              processedCount++;
+              
+              if (processedCount % 20 === 0) {
+                await this.sleep(1);
               }
-              return addressStats.get(lower)!;
-            };
+              
+              if (isCancelled() || hasError) break;
 
-            for (const log of txLogs) {
-              const addr = log.address.toLowerCase();
-              if (addr === this.config.token0.address.toLowerCase() || 
-                  addr === this.config.token1.address.toLowerCase()) {
-                
-                if (log.topics[0] === this.erc20Iface.getEvent('Transfer')?.topicHash) {
-                  const parsed = this.erc20Iface.parseLog(log);
-                  if (parsed) {
-                    const [from, to, value] = parsed.args;
-                    const val = BigInt(value);
-                    const isDai = addr === this.config.token0.address.toLowerCase();
+              try {
+                addressStats.clear();
+                const getStat = (addr: string) => {
+                  const lower = addr.toLowerCase();
+                  if (!addressStats.has(lower)) {
+                    addressStats.set(lower, { deltaDai: 0n, deltaLgns: 0n });
+                  }
+                  return addressStats.get(lower)!;
+                };
 
-                    if (isDai) {
-                      getStat(from).deltaDai -= val;
-                      getStat(to).deltaDai += val;
-                    } else {
-                      getStat(from).deltaLgns -= val;
-                      getStat(to).deltaLgns += val;
+                for (const log of txLogs) {
+                  const addr = log.address.toLowerCase();
+                  if (addr === this.config.token0.address.toLowerCase() || 
+                      addr === this.config.token1.address.toLowerCase()) {
+                    
+                    if (log.topics[0] === this.erc20Iface.getEvent('Transfer')?.topicHash) {
+                      const parsed = this.erc20Iface.parseLog(log);
+                      if (parsed) {
+                        const [from, to, value] = parsed.args;
+                        const val = BigInt(value);
+                        const isDai = addr === this.config.token0.address.toLowerCase();
+
+                        if (isDai) {
+                          getStat(from).deltaDai -= val;
+                          getStat(to).deltaDai += val;
+                        } else {
+                          getStat(from).deltaLgns -= val;
+                          getStat(to).deltaLgns += val;
+                        }
+                      }
                     }
                   }
                 }
+
+                const threshold = ethers.parseUnits(this.config.threshold, this.config.token1.decimals);
+                
+                for (const [address, stats] of addressStats.entries()) {
+                  if (address === ethers.ZeroAddress.toLowerCase()) continue;
+                  if (address === this.config.pairAddress.toLowerCase()) continue;
+
+                  let type: SwapDirection | null = null;
+                  let lgnsAmt = 0n;
+                  let daiAmt = 0n;
+
+                  if (stats.deltaLgns > 0n && stats.deltaDai < 0n) {
+                    type = SwapDirection.BUY;
+                    lgnsAmt = stats.deltaLgns;
+                    daiAmt = -stats.deltaDai;
+                  } 
+                  else if (stats.deltaLgns < 0n && stats.deltaDai > 0n) {
+                    type = SwapDirection.SELL;
+                    lgnsAmt = -stats.deltaLgns;
+                    daiAmt = stats.deltaDai;
+                  }
+
+                  if (type && lgnsAmt >= threshold) {
+                    newRecords.push({
+                      txHash,
+                      blockNumber: txBlocks.get(txHash)!,
+                      timestamp: Math.floor(Date.now() / 1000),
+                      trader: address,
+                      direction: type,
+                      lgnsAmount: lgnsAmt.toString(),
+                      daiAmount: daiAmt.toString()
+                    });
+                  }
+                }
+              } catch (txErr) {
+                console.error(`Error processing transaction ${txHash}:`, txErr);
               }
             }
 
-            const threshold = ethers.parseUnits(this.config.threshold, this.config.token1.decimals);
-            
-            for (const [address, stats] of addressStats.entries()) {
-              if (address === ethers.ZeroAddress.toLowerCase()) continue;
-              if (address === this.config.pairAddress.toLowerCase()) continue;
+            const processDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+            console.log(`✨ Processed ${txGroups.size} transactions, found ${newRecords.length} swaps in ${processDuration}s`);
 
-              let type: SwapDirection | null = null;
-              let lgnsAmt = 0n;
-              let daiAmt = 0n;
-
-              if (stats.deltaLgns > 0n && stats.deltaDai < 0n) {
-                type = SwapDirection.BUY;
-                lgnsAmt = stats.deltaLgns;
-                daiAmt = -stats.deltaDai;
-              } 
-              else if (stats.deltaLgns < 0n && stats.deltaDai > 0n) {
-                type = SwapDirection.SELL;
-                lgnsAmt = -stats.deltaLgns;
-                daiAmt = stats.deltaDai;
-              }
-
-              if (type && lgnsAmt >= threshold) {
-                newRecords.push({
-                  txHash,
-                  blockNumber: txBlocks.get(txHash)!,
-                  timestamp: Math.floor(Date.now() / 1000),
-                  trader: address,
-                  direction: type,
-                  lgnsAmount: lgnsAmt.toString(),
-                  daiAmount: daiAmt.toString()
-                });
-              }
+            if (newRecords.length > 0 && !isCancelled() && !hasError) {
+              totalFound += newRecords.length;
+              foundInChunk = newRecords.length;
+              await dbService.saveSwaps(newRecords);
             }
-          }
-
-          const processDuration = ((Date.now() - startTime) / 1000).toFixed(1);
-          console.log(`✨ Processed ${txGroups.size} transactions, found ${newRecords.length} swaps in ${processDuration}s`);
-
-          if (newRecords.length > 0) {
-            await dbService.saveSwaps(newRecords);
-            totalFound += newRecords.length;
-            this.onLog?.(`✨ Found ${newRecords.length} valid swaps in this chunk`);
           }
         }
 
-        console.log(`Scanner: Calling onProgress with current=${chunkEnd}, found=${totalFound}`);
-        onProgress(chunkEnd, totalFound);
+        // Track and report continuous contiguous progress
+        const nextContiguous = updateProgressTrack(chunk.fromBlock, chunk.toBlock);
+        
+        onProgress(
+          Math.max(start, nextContiguous),
+          totalFound,
+          `✅ [Blocks ${chunk.fromBlock}-${chunk.toBlock}] finished. Found ${foundInChunk} valid swaps.`
+        );
+      };
+
+      const worker = async () => {
+        while (nextChunkIndex < chunks.length && !isCancelled() && !hasError) {
+          const chunkIdx = nextChunkIndex++;
+          const chunk = chunks[chunkIdx];
+          
+          try {
+            await processChunk(chunk);
+          } catch (err) {
+            console.error('Parallel scan worker exception:', err);
+          }
+        }
+      };
+
+      // Create and wait for concurrent worker streams
+      const numWorkers = Math.min(CONCURRENCY, chunks.length);
+      const workerPromises = Array.from({ length: numWorkers }, worker);
+      
+      await Promise.all(workerPromises);
+
+      if (hasError) {
+        onError(errorMsg);
+        return;
       }
 
       if (!isCancelled()) {

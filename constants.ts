@@ -1,6 +1,6 @@
 
 export const DEFAULT_CONFIG = {
-  rpcUrl: 'https://api.zan.top/node/v1/polygon/mainnet/b4252a8bd2114d78982ec813c46a06eb',
+  rpcUrl: 'https://pol79729.allnodes.me:8545/fiBUP22lpmCFIeuv',
   startBlock: 80637400, 
   endBlock: 80644600,
   chunkSize: 50,
@@ -18,7 +18,7 @@ export const DEFAULT_CONFIG = {
   }
 };
 
-export const FALLBACK_RPC_URL = 'https://pol79729.allnodes.me:8545/fiBUP22lpmCFIeuv';
+export const FALLBACK_RPC_URL = 'https://pol54650.allnodes.me:8545/cv0PGU1eYycQImfT';
 
 export const UNISWAP_V2_PAIR_ABI = [
   "event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)"
